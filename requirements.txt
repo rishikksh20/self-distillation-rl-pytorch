@@ -1,0 +1,5 @@
+# Install the CUDA build of PyTorch appropriate for your machine first when needed:
+# https://pytorch.org/get-started/locally/
+torch>=2.6
+transformers>=4.51
+vllm>=0.8
