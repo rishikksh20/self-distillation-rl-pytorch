@@ -55,6 +55,24 @@ The driver accepts `--rollout-python .venv-rollout/bin/python` for both generati
 See the [vLLM installation guide](https://docs.vllm.ai/en/latest/getting_started/installation/) and
 [Qwen3.5 recipe](https://docs.vllm.ai/projects/recipes/en/latest/Qwen/Qwen3.5.html).
 
+## Jupyter training tutorials
+
+The [notebook guide](notebooks/README.md) links five separate tutorials for
+[SDFT](notebooks/01_sdft_qwen35.ipynb), [SDPO](notebooks/02_sdpo_qwen35.ipynb),
+[OPSD](notebooks/03_opsd_qwen35.ipynb), [PPO](notebooks/04_ppo_lfm25.ipynb), and
+[GRPO](notebooks/05_grpo_lfm25.ipynb). Each explains the equations, model and optimizer components,
+detailed dataset formats, real training stages, validation, and seed-versus-trained comparisons
+on both GSM8K and SVAMP test splits. Training progress uses a validation partition reserved from
+official train; final benchmark cells use official test.
+
+```bash
+python -m pip install -r requirements-notebooks.txt
+python -m jupyter lab notebooks/
+```
+
+Select a kernel using the training environment. Notebook outputs are cleared; benchmark results
+are produced by running the evaluation cells. Full target-model training is intended for CUDA.
+
 ## Standard datasets
 
 Download and normalize the official Hugging Face splits:
