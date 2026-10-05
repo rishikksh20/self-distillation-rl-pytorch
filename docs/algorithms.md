@@ -4,6 +4,10 @@ All five methods start with a causal language model, but they are not interchang
 learn from scalar outcomes. SDFT rewrites an offline supervised dataset. OPSD and SDPO turn extra
 context available during training into dense token-level supervision.
 
+The default models are Qwen3.5-0.8B for SDFT/OPSD/SDPO and LFM2.5-350M for PPO/GRPO. GSM8K
+provides worked solutions for distillation; SVAMP provides shorter verifiable arithmetic for the
+smaller policy. Both use official training splits, with separate test splits for evaluation.
+
 Notation used below:
 
 - `x`: prompt or problem
@@ -48,6 +52,10 @@ The critic uses the larger of the unclipped and clipped squared errors. In
 [`train_ppo.py`](../train_ppo.py), the causal LM and a one-layer value head share hidden states. PPO
 is useful when rewards vary independently per trajectory and a learned baseline is worth its memory
 and complexity.
+
+Old values, advantages, and returns are frozen for the entire rollout buffer before the first
+update. Later minibatches therefore use the same behavior critic. The default is one PPO epoch per
+buffer, with new rollouts generated from each updated checkpoint by the driver.
 
 ## GRPO
 
@@ -111,6 +119,10 @@ JSD(student, teacher) = 0.5 KL(student || m) + 0.5 KL(teacher || m).
 [`train_opsd.py`](../train_opsd.py) defaults to that JSD and also exposes reverse KL for comparison.
 Only the student receives gradients. The trajectory remains on-policy for the student even though
 the fixed teacher gets more context.
+
+The implementation computes the exact divergence in checkpointed token chunks, projecting only
+completion hidden states. This avoids storing prompt vocabulary logits and full response-sized
+softmax intermediates for Qwen's 248,320-token vocabulary; it does not approximate the distribution.
 
 ## SDPO
 

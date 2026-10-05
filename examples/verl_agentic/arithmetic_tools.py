@@ -5,7 +5,6 @@ import operator
 
 from verl.tools.function_tool import function_tool
 
-
 _BINARY = {
     ast.Add: operator.add,
     ast.Sub: operator.sub,

@@ -118,7 +118,7 @@ def grpo_loss(
         if reference_logprobs is None:
             raise ValueError("beta > 0 requires reference log-probabilities")
         # Positive, low-variance estimator of KL(policy || reference).
-        log_ratio = reference_logprobs - new_logprobs
+        log_ratio = (reference_logprobs - new_logprobs).clamp(-20, 20)
         per_token_kl = log_ratio.exp() - log_ratio - 1
         objective = objective - beta * per_token_kl
         kl_value = masked_mean(per_token_kl, action_mask)

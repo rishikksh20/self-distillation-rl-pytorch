@@ -1,122 +1,218 @@
 # Self-Distillation RL in Vanilla PyTorch
 
-A small, readable tutorial repository for PPO, GRPO, SDFT, OPSD, and SDPO on causal language
-models. Rollouts use **vLLM**; optimization uses direct **PyTorch** tensor operations. There is no
-TRL, OpenRLHF, or hidden trainer abstraction.
+Readable single-GPU implementations of PPO, GRPO, SDFT, OPSD, and SDPO. Optimization uses direct
+PyTorch operations. Generation supports vLLM and a portable Hugging Face Transformers backend.
+There is no TRL or hidden trainer abstraction.
 
-This is teaching code for small models on one NVIDIA GPU, not a production trainer. The defaults use
-`Qwen/Qwen2.5-0.5B-Instruct`, short sequences, tiny batches, and a generated arithmetic dataset so
-that every reward can be inspected.
+The model and dataset defaults are specific to each method:
 
-## What is implemented
+| Method | Default model | Training data | Held-out evaluation | Response budget | Sequence limit |
+|---|---|---|---|---:|---:|
+| SDFT | `Qwen/Qwen3.5-0.8B` | GSM8K train, verified self-rewrites | GSM8K test | 512 | 2048 |
+| OPSD | `Qwen/Qwen3.5-0.8B` | GSM8K train, reference-conditioned frozen teacher | GSM8K test | 512 | 2048 |
+| SDPO | `Qwen/Qwen3.5-0.8B` | GSM8K train, verifier feedback | GSM8K test | 512 | 2048 |
+| PPO | `LiquidAI/LFM2.5-350M` | SVAMP train, scalar answer reward | SVAMP test | 256 | 1024 |
+| GRPO | `LiquidAI/LFM2.5-350M` | SVAMP train, groups of four responses | SVAMP test | 256 | 1024 |
 
-| Method | Signal | Main file |
-|---|---|---|
-| PPO | Scalar verifier reward + learned value head | `train_ppo.py` |
-| GRPO | Group-normalized verifier rewards | `train_grpo.py` |
-| SDFT | Verified model-written replacements for SFT targets | `generate_sdft_data.py`, `train_sdft.py` |
-| OPSD | Frozen self-teacher with a privileged reference solution | `train_opsd.py` |
-| SDPO | Live self-teacher with rich environment feedback | `train_sdpo.py` |
-
-See [Concepts and equations](docs/algorithms.md), [code walkthrough](docs/code_walkthrough.md), and
-the [veRL agentic guide](docs/agentic_verl.md).
+SDPO is Self-Distillation Policy Optimization. LFM2.5-350M is the public checkpoint selected for
+PPO/GRPO. Override `--model` to use a compatible local checkpoint. See the official
+[Qwen model card](https://huggingface.co/Qwen/Qwen3.5-0.8B) and
+[LiquidAI model card](https://huggingface.co/LiquidAI/LFM2.5-350M).
 
 ## Installation
 
-Linux, Python 3.10+, an NVIDIA GPU, and a CUDA-compatible PyTorch build are expected. Install the
-right PyTorch wheel for your CUDA version first if the default pip wheel is not appropriate, then:
+Use Python 3.10+ and install a CUDA-compatible PyTorch build for GPU training.
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-python3 -m pip install --upgrade pip
-python3 -m pip install -r requirements.txt
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
 ```
 
-vLLM has stricter CUDA/platform requirements than the training code. Consult its installation guide
-if the wheel does not match your system.
+Transformers 5.3+ is required for Qwen3.5. The Transformers generation backend works without vLLM
+and can run small smoke tests on CPU. Full-parameter training of the target models is intended for
+a CUDA GPU; CPU runs are much slower.
 
-## Quick start
-
-Generate four completions per question. The output stores token IDs, reward, feedback, and each
-sampled token's behavior-policy log-probability:
+For faster Qwen training, optionally install the CUDA kernels after PyTorch:
 
 ```bash
-python3 -m self_distill_rl.rollout \
-  --model Qwen/Qwen2.5-0.5B-Instruct \
-  --prompts data/toy_math.jsonl \
-  --samples-per-prompt 4 \
-  --output artifacts/rollouts.jsonl
+python -m pip install -r requirements-kernels.txt
 ```
 
-Train one pass with any online method:
+These provide optimized causal convolution and gated linear attention. PyTorch fallbacks preserve
+the equations when the kernels are absent. See [Transformers Qwen3.5 documentation](https://huggingface.co/docs/transformers/model_doc/qwen3_5).
+
+vLLM has its own CUDA, Torch, and Transformers requirements. Use a separate inference environment
+when its dependency pins differ from training:
 
 ```bash
-python3 train_ppo.py  --rollouts artifacts/rollouts.jsonl --output artifacts/ppo_model
-python3 train_grpo.py --rollouts artifacts/rollouts.jsonl --output artifacts/grpo_model
-python3 train_opsd.py --rollouts artifacts/rollouts.jsonl --output artifacts/opsd_model
-python3 train_sdpo.py --rollouts artifacts/rollouts.jsonl --output artifacts/sdpo_model
+uv venv .venv-rollout
+uv pip install --python .venv-rollout/bin/python -r requirements-rollout.txt
 ```
 
-PPO can use one rollout per prompt; GRPO needs multiple rollouts in each group and should keep the
-default of four or more. OPSD and GRPO load a frozen second copy of the 0.5B model. If memory is
-tight, disable GRPO's reference KL with `--beta 0`, reduce sequence length, and use batch size 1.
+The driver accepts `--rollout-python .venv-rollout/bin/python` for both generation and evaluation.
+See the [vLLM installation guide](https://docs.vllm.ai/en/latest/getting_started/installation/) and
+[Qwen3.5 recipe](https://docs.vllm.ai/projects/recipes/en/latest/Qwen/Qwen3.5.html).
 
-For genuinely on-policy rounds, use the driver:
+## Standard datasets
+
+Download and normalize the official Hugging Face splits:
 
 ```bash
-python3 on_policy_loop.py --algorithm grpo --rounds 2 --samples-per-prompt 4
+python prepare_datasets.py
 ```
 
-The driver launches rollout and training as separate processes. vLLM exits before the optimizer is
-created, so their large memory pools never coexist. It also refreshes rollout behavior
-log-probabilities from each new checkpoint.
+This writes:
 
-## SDFT quick start
+```text
+artifacts/datasets/gsm8k/train.jsonl    7473 examples
+artifacts/datasets/gsm8k/test.jsonl     1319 examples
+artifacts/datasets/svamp/train.jsonl     700 examples
+artifacts/datasets/svamp/test.jsonl      300 examples
+```
 
-SDFT is a two-stage data pipeline rather than policy-gradient RL:
+[GSM8K](https://huggingface.co/datasets/openai/gsm8k) supplies questions, worked solutions, and
+numeric final answers. [SVAMP](https://huggingface.co/datasets/ChilleD/SVAMP) supplies shorter
+arithmetic word problems, equations, and answers, suitable for the smaller policy model. Either
+dataset can be used with any method by passing its JSONL path.
+
+All records contain `id`, `prompt`, `answer`, `reference`, `dataset`, and `split`. Training prompts
+contain the question and response-format instruction. Solutions enter SDFT rewriting and privileged
+teacher contexts; evaluation uses only the ordinary question prompt.
+
+Use `--dataset gsm8k` or `--dataset svamp` to prepare one dataset, `--train-limit`/`--eval-limit` for
+small subsets, and `--revision <commit-sha>` to pin a dataset version. A manifest records the source,
+revision, counts, and shuffle seed. Train and test retain separate official splits and stable IDs.
+The original `data/toy_math.jsonl` remains available for inspectable local examples.
+
+## Run training and evaluation
+
+The driver prepares missing default data, takes 256 training examples and 64 test examples, evaluates
+the seed, and evaluates every new checkpoint. Use the Transformers backend for a single environment:
 
 ```bash
-python3 generate_sdft_data.py --data data/toy_math.jsonl --output artifacts/sdft_data.jsonl
-python3 train_sdft.py --data artifacts/sdft_data.jsonl --output artifacts/sdft_model
+python on_policy_loop.py --algorithm sdft --backend transformers --rounds 1
+python on_policy_loop.py --algorithm opsd --backend transformers --rounds 1
+python on_policy_loop.py --algorithm sdpo --backend transformers --rounds 1
+python on_policy_loop.py --algorithm ppo  --backend transformers --rounds 1
+python on_policy_loop.py --algorithm grpo --backend transformers --rounds 1
 ```
 
-The first stage asks the seed model to rewrite each reference response in its own style. A simple
-final-answer verifier accepts the rewrite or falls back to the original reference. The second stage
-is response-masked causal-language-model cross entropy.
+For faster GPU generation with the separate vLLM environment:
 
-## Repository layout
+```bash
+python on_policy_loop.py --algorithm grpo --rounds 2 \
+  --rollout-python .venv-rollout/bin/python
+```
+
+Generation, optimization, and evaluation run in separate processes, freeing inference memory before
+training. GRPO's reference and OPSD's teacher stay fixed at the initial checkpoint across rounds.
+SDFT uses the same driver to alternate rewriting and supervised fine-tuning.
+
+Outputs live under `artifacts/on_policy/<algorithm>/`: selected training prompts, round buffers,
+checkpoints, `baseline_eval.json`, and `round_XX_eval.json`, plus per-example prediction files.
+Use `--train-limit` and `--eval-limit` to change subset sizes; `--prompts` and `--eval-prompts` select
+custom files. The driver rejects overlapping train/eval prompts. `--skip-eval` skips evaluation.
+
+For individual stages:
+
+```bash
+# PPO and GRPO use their own model/dataset presets.
+python -m self_distill_rl.rollout --algorithm ppo --backend transformers \
+  --output artifacts/ppo_rollouts.jsonl
+python train_ppo.py --rollouts artifacts/ppo_rollouts.jsonl
+
+python -m self_distill_rl.rollout --algorithm grpo --backend transformers \
+  --output artifacts/grpo_rollouts.jsonl
+python train_grpo.py --rollouts artifacts/grpo_rollouts.jsonl
+
+# Generate Qwen rollouts separately from LFM rollouts.
+python -m self_distill_rl.rollout --algorithm opsd --backend transformers \
+  --output artifacts/qwen_rollouts.jsonl
+python train_opsd.py --rollouts artifacts/qwen_rollouts.jsonl
+python train_sdpo.py --rollouts artifacts/qwen_rollouts.jsonl
+
+# SDFT verifies model rewrites and falls back to original worked solutions.
+python generate_sdft_data.py --backend transformers
+python train_sdft.py
+```
+
+To evaluate any saved checkpoint:
+
+```bash
+python evaluate.py --algorithm sdft --model artifacts/sdft_model \
+  --backend transformers --limit 128 --output artifacts/eval/sdft.json
+python evaluate.py --algorithm grpo --model artifacts/grpo_model \
+  --backend transformers --limit 128 --output artifacts/eval/grpo.json
+```
+
+Evaluation reports numeric final-answer accuracy, mean response length, and truncation rate, with
+raw predictions alongside the metrics. It defaults to one greedy response per prompt. With
+`--samples-per-prompt N`, it samples at temperature 1 and also reports the fraction of questions
+with any correct sample. These are checkpoint comparison metrics; official leaderboard protocols
+may use different prompts and decoding settings. Evaluation rejects records marked as training data.
+
+## Training controls and correctness
+
+- Response states alone enter the output projection. Vocabulary operations are checkpointed in
+  chunks of 32 tokens, retaining exact full-vocabulary JSD/reverse KL and masked cross entropy.
+- Qwen's native multimodal checkpoint layout is preserved. Text training bypasses and freezes the
+  vision encoder; vLLM uses `language_model_only=True` to avoid vision profiling and weights.
+- Trainable weights and Adam state use FP32. CUDA computation uses BF16 autocast when supported,
+  otherwise FP16 autocast with gradient scaling. This prevents small RL updates rounding away in
+  BF16 parameters. Frozen reference/teacher weights use the compute dtype.
+- Gradient checkpointing is on by default. SDFT/OPSD/SDPO/PPO default to one response per microbatch
+  and four accumulation steps; GRPO defaults to one complete group per microbatch. Partial final
+  accumulation windows are averaged correctly. Use `--no-gradient-checkpointing` to disable it.
+- `--max-seq-length` bounds training input, including privileged context. Inputs exceeding the
+  budget raise an error, preserving sampled tokens and their behavior probabilities. The driver
+  forwards its `--max-model-len` to training. Increase the budget for longer custom data.
+- PPO snapshots all old values and advantages before its first update. PPO and GRPO default to one
+  policy epoch per rollout buffer; refresh trajectories through the driver for later rounds.
+- PPO/GRPO generation uses temperature 1, top-p 1, no top-k truncation, and no repetition penalty.
+  vLLM checkpoint sampling defaults are disabled explicitly. Both backends store the sampled token
+  IDs and behavior log-probabilities; trainers reject mismatched model provenance or sampling.
+- Numeric verification handles decimals, thousands separators, fractions, and common final-answer
+  delimiters. Closed thinking blocks are excluded from answer extraction; unfinished thinking
+  blocks do not earn reward. SDFT rejects truncated rewrites.
+
+Tuning flags include `--gradient-accumulation-steps`, `--logit-chunk-size`, `--learning-rate`,
+`--max-grad-norm`, and `--attention-implementation` on trainers. Lower chunk size to reduce vocabulary
+workspace, and lower sequence/group sizes when activations dominate. Full-parameter FP32 optimizer
+state still requires significant memory; chunking reduces vocabulary workspaces rather than model
+and optimizer storage.
+
+## Repository and checks
 
 ```text
 self_distill_rl/
-  io.py              JSONL, chat formatting, right-padded action masks
-  rollout.py         vLLM generation and behavior log-probabilities
-  modeling.py        model loading, log-probs, value head, divergences
-  objectives.py      PPO/GAE and GRPO equations in PyTorch
-  distillation.py    OPSD/SDPO privileged-context construction
-data/toy_math.jsonl  tiny inspectable task/reference dataset
-tests/               objective and reward smoke tests
-examples/verl_agentic/  optional multi-turn veRL example
+  presets.py         model, dataset, and token-budget defaults
+  datasets.py        Hugging Face dataset normalization
+  io.py              JSONL, chat formatting, causal masks
+  rollout.py         vLLM / Transformers generation and log-probabilities
+  modeling.py        model loading, chunked response projection, value head
+  training.py        accumulation and rollout validation
+  objectives.py      PPO/GAE and GRPO equations
+  distillation.py    privileged teacher contexts
+prepare_datasets.py  standard train/test data preparation
+evaluate.py          held-out final-answer evaluation
+on_policy_loop.py    all five pipelines with baseline/round evaluation
 ```
-
-## Checks
 
 ```bash
-python3 -m unittest discover -s tests -v
-python3 -m compileall -q self_distill_rl *.py
+python -m unittest discover -s tests -v
+python -m compileall -q self_distill_rl tests *.py
 ```
 
-The unit tests require PyTorch but do not download a model. Full training requires a GPU and model
-download. Start with one round and inspect `artifacts/rollouts.jsonl` before scaling anything.
+Tests use tiny real Qwen3.5 and LFM2 architectures without downloading weights. They compare values
+and gradients against dense losses, verify teacher stop-gradient, causal alignment, behavior
+log-probabilities, rewards, accumulation, and dataset/evaluation schemas.
 
-## Scope and caveats
+See [concepts and equations](docs/algorithms.md), [code walkthrough](docs/code_walkthrough.md), and
+the optional [veRL agentic guide](docs/agentic_verl.md).
 
-- The included exact-match reward is intentionally narrow. Replace it with your own deterministic
-  verifier, tests, or environment before using real data.
-- The tutorial SDPO feedback includes the verified answer when a rollout fails. That makes the
-  privileged signal obvious, but it is stronger than a compiler error or ordinary scalar reward.
-- Full-vocabulary OPSD/SDPO losses are easier to understand but use more memory than sampled-token or
-  top-k approximations.
-- Optimizer state is restarted between rounds by `on_policy_loop.py`; that keeps the orchestration
-  transparent but is not ideal for long runs.
-- Generated checkpoints and rollout buffers belong under `artifacts/`, which is git-ignored.
+The SDPO feedback verifier reveals the correct answer after a failed attempt, which is stronger
+than ordinary tool feedback. The reward is specific to numeric math tasks; other domains require
+their own verifier. Optimizer state is restarted between driver rounds; model weights and PPO's
+value head are preserved. Generated data, checkpoints, and metrics are git-ignored under `artifacts/`.

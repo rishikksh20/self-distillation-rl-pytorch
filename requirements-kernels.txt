@@ -1,0 +1,4 @@
+# Optional CUDA training kernels for Qwen3.5's hybrid linear-attention backbone.
+# Install after a CUDA-compatible Torch build, in the training environment.
+causal-conv1d
+flash-linear-attention

@@ -5,6 +5,13 @@ latency, multiple assistant turns, per-turn loss masks, environment lifecycle ma
 synchronization with the inference engine. Those are systems problems, so the repository includes a
 veRL path instead of recreating them in a tutorial loop.
 
+The primary single-turn PPO/GRPO scripts now use `LiquidAI/LFM2.5-350M`, with SVAMP train/test
+data. This optional tool-loop template retains its separate Hermes-compatible Qwen2.5 checkpoint.
+LFM2.5 uses a different native tool-call format, so switching this veRL example also requires a
+compatible registered tool parser in the selected veRL revision. The current upstream parser
+[registry](https://github.com/volcengine/verl/blob/main/verl/experimental/agent_loop/tool_parser.py)
+does not include an LFM parser. The vanilla model/dataset presets do not depend on this example.
+
 veRL's agent loop supports asynchronous rollout servers, vLLM, custom multi-turn loops, and tools.
 The included example registers a safe arithmetic function tool in
 [`examples/verl_agentic/arithmetic_tools.py`](../examples/verl_agentic/arithmetic_tools.py) and

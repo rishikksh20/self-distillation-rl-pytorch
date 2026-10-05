@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from typing import Any, Sequence
+from collections.abc import Sequence
+from typing import Any
 
 from .io import CausalBatch, causal_batch, chat_prompt_ids
-
 
 OPSD_SYSTEM = (
     "You are a solution-aware teacher. Use the private verified solution to evaluate how a "
@@ -38,6 +38,7 @@ def teacher_batch(
     records: Sequence[dict[str, Any]],
     tokenizer: Any,
     method: str,
+    max_seq_length: int | None = None,
 ) -> CausalBatch:
     if method == "opsd":
         contexts = [
@@ -52,4 +53,10 @@ def teacher_batch(
     else:
         raise ValueError(f"unknown teacher context method: {method}")
     completions = [row["completion_token_ids"] for row in records]
+    if max_seq_length is not None and any(
+        len(p) + len(c) > max_seq_length for p, c in zip(contexts, completions)
+    ):
+        raise ValueError(
+            "privileged teacher context exceeds --max-seq-length; increase the limit or shorten the data"
+        )
     return causal_batch(contexts, completions, int(tokenizer.pad_token_id))

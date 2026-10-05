@@ -1,0 +1,3 @@
+# Install separately if the vLLM wheel requires different Torch/Transformers pins.
+# https://docs.vllm.ai/en/latest/models/supported_models.html
+vllm>=0.19

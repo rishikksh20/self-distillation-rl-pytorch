@@ -1,7 +1,8 @@
 # Code walkthrough
 
-The project favors visible intermediate data over a highly optimized trainer. One JSONL file is the
-boundary between inference and learning, and each loss fits in one source file.
+One JSONL file is the boundary between inference and learning, and each loss fits in one source
+file. Model loading and vocabulary operations are optimized for Qwen3.5-0.8B and LFM2.5-350M while
+keeping the objectives explicit.
 
 ## 1. Input data
 
@@ -16,11 +17,16 @@ boundary between inference and learning, and each loss fits in one source file.
 }
 ```
 
+[`prepare_datasets.py`](../prepare_datasets.py) also downloads and normalizes official Hugging Face
+GSM8K and SVAMP train/test splits. Defaults in [`presets.py`](../self_distill_rl/presets.py) select
+GSM8K for the Qwen self-distillation methods and SVAMP for LFM PPO/GRPO. Each normalized record
+retains dataset provenance and split identity. The driver rejects train/eval prompt overlap.
+
 `answer` is the compact value used by the verifier. `reference` is a worked solution used by SDFT
 and as OPSD privileged information. Real tasks should replace the regex verifier with unit tests,
 symbolic checks, a simulator, or another deterministic environment.
 
-## 2. vLLM rollout
+## 2. Rollout
 
 [`self_distill_rl/rollout.py`](../self_distill_rl/rollout.py) applies the tokenizer's chat template,
 passes prompt token IDs to vLLM, and requests one log-probability entry per sampled token. A rollout
@@ -41,8 +47,10 @@ record contains:
 `group_id` joins GRPO responses sampled from one problem. The raw token IDs prevent a decode/encode
 round trip from changing the action sequence. `old_logprobs` are `log pi_old` in PPO and GRPO.
 The rollout defaults to temperature 1 and top-p 1 so PyTorch's ordinary full-softmax log-probability
-describes the same behavior distribution. If sampling is tempered or truncated, the trainer must
-reproduce that transform before forming importance ratios.
+describes the same behavior distribution. Checkpoint generation defaults are disabled and top-k is
+unrestricted. Both vLLM and the portable Transformers backend return sampled IDs and probabilities.
+PPO/GRPO reject tempered or truncated sampling. Model identity and sampling settings are retained in
+each record. vLLM also bounds sequence length and concurrency and skips Qwen's vision encoder.
 
 ## 3. Causal token alignment
 
@@ -65,7 +73,8 @@ This same alignment is used for:
 tensors and implements terminal reward placement, GAE, PPO clipping, group normalization, the GRPO
 surrogate, and the optional reference KL. This separation makes the signs and masks easy to test.
 
-PPO freezes old value predictions and advantages before its inner epochs. GRPO preserves complete
+PPO freezes old value predictions and advantages for the entire buffer before any optimizer step.
+GRPO preserves complete
 prompt groups in a mini-batch; splitting a group would change its mean and standard deviation.
 
 ## 5. The three self-distillation paths
@@ -80,8 +89,10 @@ student context = original chat prompt
 teacher context = problem + private verified solution
 ```
 
-The frozen seed teacher and trainable student produce aligned `[C, vocabulary]` tensors. Their JSD
-is averaged over response tokens.
+The frozen seed teacher and trainable student produce aligned completion hidden states. Output
+projection and exact full-vocabulary JSD are computed in small token chunks, checkpointing those
+operations for backward. Prompt vocabulary logits are never materialized. The loss remains the
+mean over response tokens, then the mean over responses.
 
 SDPO uses:
 
@@ -93,7 +104,13 @@ teacher context = problem + post-attempt environment feedback
 Both passes use the current model weights. The teacher pass occurs first under `torch.no_grad()`,
 which implements `stopgrad`; only the question-only student branch is updated.
 
-## 6. One-GPU lifecycle
+## 6. Precision and one-GPU lifecycle
+
+Trainable parameters and Adam state use FP32 so small RL updates remain representable. Forward
+computation uses BF16 autocast on supported CUDA devices or scaled FP16 on older devices. Frozen
+reference/teacher weights use the compute dtype. Qwen's vision weights stay frozen and its native
+checkpoint layout is retained for vLLM. Gradient checkpointing and accumulation are enabled by
+default; partial accumulation windows retain the same average gradient.
 
 [`on_policy_loop.py`](../on_policy_loop.py) runs this sequence:
 
@@ -105,15 +122,21 @@ Process exit is the resource boundary. It reliably releases vLLM's engine and KV
 weights plus Adam states are loaded for training. This is deliberately less efficient than a hybrid
 engine with in-memory weight synchronization, but much easier to inspect.
 
+The driver evaluates the seed checkpoint and every saved checkpoint through [`evaluate.py`](../evaluate.py).
+The held-out branch has no privileged solutions or feedback in its prompt. Metrics include answer
+accuracy, response length, and truncation, alongside per-example predictions. SDFT uses the same
+driver with a rewrite stage in place of on-policy rollouts. `--rollout-python` separates vLLM's
+dependency environment from the training environment when their Transformers pins differ.
+
 ## 7. Extending the tutorial
 
 The first useful extensions are:
 
 1. Replace `exact_match_reward` and `environment_feedback` in
    [`rewards.py`](../self_distill_rl/rewards.py).
-2. Add length limits before batching; attention cost grows quadratically with sequence length.
-3. Add gradient accumulation if batch size 1 is too noisy.
-4. Replace full-vocabulary distillation with top-k logits when vocabulary memory dominates.
+2. Tune the existing length limits before batching; attention cost increases with sequence length.
+3. Tune gradient accumulation if batch size 1 is too noisy.
+4. Tune `--logit-chunk-size` when vocabulary workspace dominates; exact divergences are retained.
 5. Move orchestration to veRL when rollouts involve asynchronous tools or multiple GPUs.
 
 Avoid blindly mixing rollout files from old checkpoints. PPO/GRPO importance clipping tolerates
