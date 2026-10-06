@@ -73,6 +73,13 @@ python -m jupyter lab notebooks/
 Select a kernel using the training environment. Notebook outputs are cleared; benchmark results
 are produced by running the evaluation cells. Full target-model training is intended for CUDA.
 
+For Google Colab, the [standalone editions](notebooks/README.md#standalone-google-colab-editions)
+embed all required training and evaluation code and include their own dependency-install cell.
+Upload any `_standalone.ipynb` file directly; no repository checkout is needed.
+Standalone recipes can train on math, Python coding, tool use, or a configurable mixture,
+with domain-specific validation and paired before/after benchmarks. Their tutorials describe
+the MBPP/HumanEval execution protocol and adapted BFCL argument-matching score.
+
 ## Standard datasets
 
 Download and normalize the official Hugging Face splits:

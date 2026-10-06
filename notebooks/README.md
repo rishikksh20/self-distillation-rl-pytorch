@@ -12,6 +12,76 @@ generated dataset fields, optimization, validation, and final benchmark protocol
 | [PPO](04_ppo_lfm25.ipynb) | LiquidAI/LFM2.5-350M | SVAMP | GSM8K |
 | [GRPO](05_grpo_lfm25.ipynb) | LiquidAI/LFM2.5-350M | SVAMP | GSM8K |
 
+## Standalone Google Colab editions
+
+These alternatives embed every required function, including data normalization, generation,
+token masking, model loading, optimizer, method-specific training, and benchmark reporting:
+
+| Method | Standalone notebook |
+|---|---|
+| SDFT | [01_sdft_qwen35_standalone.ipynb](01_sdft_qwen35_standalone.ipynb) |
+| SDPO | [02_sdpo_qwen35_standalone.ipynb](02_sdpo_qwen35_standalone.ipynb) |
+| OPSD | [03_opsd_qwen35_standalone.ipynb](03_opsd_qwen35_standalone.ipynb) |
+| PPO | [04_ppo_lfm25_standalone.ipynb](04_ppo_lfm25_standalone.ipynb) |
+| GRPO | [05_grpo_lfm25_standalone.ipynb](05_grpo_lfm25_standalone.ipynb) |
+
+Upload a single file using **Colab → File → Upload notebook**, choose a GPU runtime, and run cells
+in order. The first code cell lists the complete external dependencies, writes a requirements
+file locally, and installs those libraries. No checkout, repository imports, helper files, or
+external requirements file are needed. The training and evaluation loops are visible notebook code.
+
+All five standalone notebooks support math, Python coding, and single-turn tool use. Select
+`DOMAINS = "all"`, one domain such as `["coding"]`, or a combination such as
+`["coding", "tool_use"]`. `TRAIN_SOURCES` selects source datasets; `TRAIN_LIMITS` controls
+the mixture with a count per domain. The default fits 16 training / 8 validation questions
+per domain, uses 256 generated tokens, and evaluates a labeled 32-question subset per benchmark.
+
+| Domain | Training | Validation | Final before/after tests |
+|---|---|---|---|
+| Math | GSM8K or SVAMP official train | Reserved train questions | GSM8K and SVAMP official tests |
+| Coding | MBPP `full/train`, with reference test checks | MBPP `full/validation` | MBPP test and HumanEval test |
+| Tool use | Hermes single-turn; optional authenticated xLAM | Reserved source questions | Separate source holdout and BFCL simple calls |
+
+Selected domains get separate training/validation JSONL files and a shuffled training mixture.
+Verifiers dispatch by domain: numeric equality, Python unit tests, or tool schemas and argument
+matching. SDPO feedback comes from the policy's actual new attempt. Multi-turn agent datasets
+are excluded because these notebooks train single-response tasks without an environment loop.
+Each standalone recipe also explains and checks how its selected datasets supply the actual
+objective: SDFT targets, SDPO feedback, OPSD private references, or PPO/GRPO verifier rewards.
+`dataset_recipe.json` and the pre-training table record the sources that actually contributed
+sampled tasks. Buffer checks preserve each selected task's public prompt, domain, and verifier,
+reject held-out examples and missing objective fields, and enforce complete GRPO groups.
+
+Final reports compare the original pretrained checkpoint and final policy on identical question
+IDs, prompts, decoding budgets, and verifiers. They include domain scores, paired gains/losses,
+Wilson intervals, token/truncation diagnostics, a before/after plot, and saved predictions.
+Coding runs in a restricted child process; its instruction-style execution protocol and the
+local BFCL JSON argument matcher are explicitly labeled adaptations, not official leaderboard
+scores. Tool calls are checked against references, not executed against live APIs.
+
+Set `BENCHMARK_LIMIT=None` to evaluate every prepared test row. The protocol manifest records
+source, normalization, overlap, reference-check, and context exclusions; a full prepared test
+can differ from the original publisher's full split. The tool source holdout is explicitly
+identified as reserved training data. Optional xLAM requires accepting its HF terms and setting
+`HF_TOKEN`; Hermes is ungated. Dependencies for every adapter/evaluator are in the install cell.
+
+OPSD uses a CPU teacher by default to reduce GPU memory use; a GPU
+teacher can be selected when memory permits. Colab hardware and session limits vary, so the
+notebooks report the actual device and explain full-parameter memory requirements.
+
+Outputs default to `/content/rl_tutorials/<method>/<domains>_<config-digest>/`. Set the output root
+to persistent storage or use
+the optional results-download cell to retain them. Checkpoints are excluded from the ZIP by
+default because they can be large; a setting includes them when requested.
+
+An optional `STANDALONE_SMOKE=1` mode creates its own tiny random Qwen/LFM architecture,
+tokenizer, and toy math/coding/tool data within the notebook, then executes two training rounds offline. No
+repository or external fixture is required. `STANDALONE_SKIP_INSTALL=1` is only for validation
+in an environment that already has the listed packages. These checks are labeled as smoke
+checks and make no claims about pretrained-model benchmark accuracy.
+
+## Repository-backed editions
+
 From the repository root, using the Python environment intended for training:
 
 ```bash
